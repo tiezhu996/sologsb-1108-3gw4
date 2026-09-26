@@ -1,0 +1,10 @@
+name: gbfilmdev
+
+services:
+  frontend:
+    build: ./frontend
+    image: gbfilmdev-frontend:latest
+    container_name: ${COMPOSE_PROJECT_NAME:-gbfilmdev}-frontend
+    ports:
+      - "${FRONTEND_PORT:-21808}:80"
+    restart: unless-stopped
