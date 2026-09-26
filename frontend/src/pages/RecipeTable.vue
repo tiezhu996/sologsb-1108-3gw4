@@ -9,7 +9,7 @@ import { useRecipeFilter } from '../hooks/useRecipeFilter'
 import { useDeveloperStore } from '../stores/developerStore'
 import { useFilmStore } from '../stores/filmStore'
 import { useRecipeStore } from '../stores/recipeStore'
-import type { Developer, Dilution } from '../types/developer'
+import type { Dilution } from '../types/developer'
 import type { DevRecipe, PushPull } from '../types/dev-recipe'
 
 interface RecipeForm {
@@ -30,6 +30,8 @@ const filmStore = useFilmStore()
 const developerStore = useDeveloperStore()
 const recipeStore = useRecipeStore()
 const { filmId, dilution, pushPull, filteredRecipes, resetFilters } = useRecipeFilter()
+const stockedFilms = computed(() => filmStore.films.filter((film) => film.rollsLeft > 0))
+const activeDevelopers = computed(() => developerStore.developers.filter((developer) => developer.state !== '报废'))
 const showForm = ref(false)
 const saving = ref(false)
 const sampleWorkingVolume = ref(300)
@@ -129,9 +131,8 @@ async function submitRecipe(): Promise<void> {
 
 onMounted(async () => {
   await Promise.all([filmStore.load(), developerStore.load(), recipeStore.load()])
-  if (filmStore.films[0]?.id !== undefined) form.filmId = filmStore.films[0].id
-  const usableDeveloper = developerStore.developers.find((item: Developer) => item.state !== '报废')
-  if (usableDeveloper?.id !== undefined) form.developerId = usableDeveloper.id
+  if (stockedFilms.value[0]?.id !== undefined) form.filmId = stockedFilms.value[0].id
+  if (activeDevelopers.value[0]?.id !== undefined) form.developerId = activeDevelopers.value[0].id
 })
 </script>
 
@@ -159,7 +160,7 @@ onMounted(async () => {
         <label class="span-2">
           <span>胶片</span>
           <select v-model.number="form.filmId" data-testid="field-filmId">
-            <option v-for="film in filmStore.films" :key="film.id" :value="film.id">
+            <option v-for="film in stockedFilms" :key="film.id" :value="film.id">
               {{ filmLabel(film.id ?? 0) }}
             </option>
           </select>
@@ -167,7 +168,7 @@ onMounted(async () => {
         <label class="span-2">
           <span>显影液</span>
           <select v-model.number="form.developerId" data-testid="field-developerId">
-            <option v-for="developer in developerStore.developers" :key="developer.id" :value="developer.id">
+            <option v-for="developer in activeDevelopers" :key="developer.id" :value="developer.id">
               {{ developerLabel(developer.id ?? 0) }}
             </option>
           </select>
@@ -232,7 +233,7 @@ onMounted(async () => {
           <span>胶片</span>
           <select v-model="filmId">
             <option value="all">全部胶片</option>
-            <option v-for="film in filmStore.films" :key="film.id" :value="film.id">{{ film.model }} · {{ film.emulsionNo }}</option>
+            <option v-for="film in stockedFilms" :key="film.id" :value="film.id">{{ film.model }} · {{ film.emulsionNo }}</option>
           </select>
         </label>
         <label>
@@ -266,9 +267,9 @@ onMounted(async () => {
         <div class="panel__head">
           <div>
             <h2>配方清单</h2>
-            <p>当前筛选显示 {{ filteredRecipes.length }} 条，共 {{ recipeStore.recipes.length }} 条。</p>
+            <p>当前筛选显示 {{ filteredRecipes.length }} 条，共 {{ recipeStore.stockedRecipes.length }} 条。</p>
           </div>
-          <span class="count-pill">配方数 <strong data-testid="count-recipe">{{ recipeStore.recipes.length }}</strong></span>
+          <span class="count-pill">配方数 <strong data-testid="count-recipe">{{ recipeStore.stockedRecipes.length }}</strong></span>
         </div>
         <div class="table-wrap">
           <table>

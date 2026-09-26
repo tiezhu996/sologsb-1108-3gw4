@@ -9,7 +9,8 @@ import { useTempCompensate } from '../hooks/useTempCompensate'
 import { useDeveloperStore } from '../stores/developerStore'
 import { useFilmStore } from '../stores/filmStore'
 import { useRecipeStore } from '../stores/recipeStore'
-import { useRunStore } from '../stores/runStore'
+import { useRunStore, RunConsumeError } from '../stores/runStore'
+import { remainingRolls } from '../utils/ratio'
 import type { TankType } from '../types/dev-run'
 
 interface FilterValue {
@@ -51,7 +52,7 @@ const filterValue = ref<FilterValue>({
 
 const form = reactive<RunForm>({
   batchNo: `R-${today.replace(/-/g, '')}-01`,
-  recipeId: 1,
+  recipeId: 0,
   actualTempC: 20,
   actualMinutes: 8,
   tankType: '双联罐',
@@ -59,7 +60,12 @@ const form = reactive<RunForm>({
   result: '密度均匀，中间调细腻'
 })
 
+const selectableRecipes = computed(() => recipeStore.selectableRecipes)
 const selectedRecipe = computed(() => recipeStore.recipes.find((recipe) => recipe.id === form.recipeId))
+const selectedFilm = computed(() => filmStore.films.find((film) => film.id === selectedRecipe.value?.filmId))
+const selectedDeveloper = computed(() => developerStore.developers.find(
+  (developer) => developer.id === selectedRecipe.value?.developerId
+))
 const referenceTemp = computed(() => selectedRecipe.value?.tempC ?? 20)
 const { suggest } = useTempCompensate(referenceTemp)
 const suggestion = computed(() => {
@@ -67,6 +73,13 @@ const suggestion = computed(() => {
   if (!recipe) return null
   return suggest(recipe.devMinutes, form.actualTempC)
 })
+
+watch(selectableRecipes, (recipes) => {
+  // 胶片扣完或显影液报废后，当前配方若已不可选则自动落到第一条可选配方
+  if (!recipes.some((recipe) => recipe.id === form.recipeId)) {
+    form.recipeId = recipes[0]?.id ?? 0
+  }
+}, { immediate: true })
 
 watch(selectedRecipe, (recipe) => {
   if (!recipe) return
@@ -111,13 +124,13 @@ async function submitRun(): Promise<void> {
     ElMessage.warning('请填写批次号、配方与结果评价')
     return
   }
+  if (!selectableRecipes.value.some((recipe) => recipe.id === form.recipeId)) {
+    ElMessage.warning('该配方的胶片批次已缺货或显影液已报废，请补货或重新配制后选择其他配方')
+    return
+  }
   saving.value = true
-  const selectedDeveloper = developerStore.developers.find((item) => item.id === selectedRecipe.value?.developerId)
-  const willExceedLimit = selectedDeveloper !== undefined
-    && selectedDeveloper.state !== '报废'
-    && selectedDeveloper.usedRolls + 1 > selectedDeveloper.maxRolls
   try {
-    await runStore.addRun({
+    const consumed = await runStore.addRun({
       batchNo: form.batchNo.trim(),
       recipeId: Number(form.recipeId),
       actualTempC: Number(form.actualTempC),
@@ -126,15 +139,22 @@ async function submitRun(): Promise<void> {
       runDate: form.runDate,
       result: form.result.trim()
     })
-    await Promise.all([developerStore.load(), recipeStore.load()])
-    if (willExceedLimit) {
-      ElMessage.warning('冲洗记录已保存，本次已超过显影液标称可冲上限，请评估后标记报废')
+    await Promise.all([filmStore.load(), developerStore.load(), recipeStore.load()])
+    if (consumed.developerScrapped) {
+      ElMessage.warning(`冲洗记录已保存，胶片批次 ${consumed.filmEmulsionNo} 扣一卷；显影液 ${consumed.developerName} 已冲到上限并报废，需要重新配制`)
     } else {
-      ElMessage.success('冲洗记录已保存，显影液用量同步更新')
+      ElMessage.success(`冲洗记录已保存，胶片批次 ${consumed.filmEmulsionNo} 与显影液用量各扣一卷`)
     }
     form.batchNo = `R-${today.replace(/-/g, '')}-${String(runStore.runs.length + 1).padStart(2, '0')}`
     form.result = ''
     showForm.value = false
+  } catch (error) {
+    // 胶片或显影液已用完时记录不写入，提示补货或重新配制
+    if (error instanceof RunConsumeError) {
+      ElMessage.warning(`${error.message}，本次记录未保存`)
+    } else {
+      throw error
+    }
   } finally {
     saving.value = false
   }
@@ -149,8 +169,8 @@ async function writeBack(recipeId?: number, runId?: number): Promise<void> {
 
 onMounted(async () => {
   await Promise.all([filmStore.load(), developerStore.load(), recipeStore.load(), runStore.load()])
-  if (recipeStore.recipes[0]?.id !== undefined) {
-    form.recipeId = recipeStore.recipes[0].id
+  if (selectableRecipes.value[0]?.id !== undefined) {
+    form.recipeId = selectableRecipes.value[0].id
   }
 })
 </script>
@@ -184,10 +204,17 @@ onMounted(async () => {
         <label class="span-2">
           <span>冲洗配方</span>
           <select v-model.number="form.recipeId" data-testid="field-recipeId">
-            <option v-for="recipe in recipeStore.recipes" :key="recipe.id" :value="recipe.id">
+            <option v-for="recipe in selectableRecipes" :key="recipe.id" :value="recipe.id">
               {{ recipeLabel(recipe.id ?? 0) }}
             </option>
           </select>
+          <small v-if="selectedFilm && selectedDeveloper" class="stock-hint">
+            胶片批次 {{ selectedFilm.emulsionNo }} 剩 {{ selectedFilm.rollsLeft }} 卷 ·
+            显影液剩余 {{ remainingRolls(selectedDeveloper.maxRolls, selectedDeveloper.usedRolls) }} 卷额度
+          </small>
+          <small v-if="selectableRecipes.length === 0" class="stock-hint stock-hint--danger">
+            胶片或显影液已全部用完，请补货或重新配制后再录入记录。
+          </small>
         </label>
         <label>
           <span>实测温度</span>
@@ -215,7 +242,7 @@ onMounted(async () => {
         <div class="span-3 compensation-callout">
           <div>
             <strong>温度补偿建议</strong>
-            <p v-if="suggestion">{{ suggestion.advice }}；显影液用量会在保存后加一卷。</p>
+            <p v-if="suggestion">{{ suggestion.advice }}；保存后胶片与显影液各扣一卷。</p>
             <p v-else>请选择一条配方后查看修正建议。</p>
           </div>
           <button type="button" class="ghost-button" :disabled="!suggestion" @click="applySuggestion">采用修正时间</button>
@@ -223,7 +250,7 @@ onMounted(async () => {
       </div>
       <div class="form-actions">
         <button type="button" class="ghost-button" @click="showForm = false">取消</button>
-        <button type="submit" class="primary-button" data-testid="submit-run" :disabled="saving">
+        <button type="submit" class="primary-button" data-testid="submit-run" :disabled="saving || selectableRecipes.length === 0">
           {{ saving ? '保存中…' : '保存冲洗记录' }}
         </button>
       </div>
