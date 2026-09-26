@@ -33,7 +33,12 @@ const { filmId, dilution, pushPull, filteredRecipes, resetFilters } = useRecipeF
 const showForm = ref(false)
 const saving = ref(false)
 const sampleWorkingVolume = ref(300)
-const referenceTemp = computed(() => filteredRecipes.value[0]?.tempC ?? 20)
+const inStockFilms = computed(() => filmStore.films.filter((film) => film.rollsLeft > 0))
+const visibleRecipes = computed(() => filteredRecipes.value.filter((recipe) => {
+  const film = filmStore.films.find((item) => item.id === recipe.filmId)
+  return film !== undefined && film.rollsLeft > 0
+}))
+const referenceTemp = computed(() => visibleRecipes.value[0]?.tempC ?? 20)
 const { actualTempC, suggest } = useTempCompensate(referenceTemp)
 
 watch(referenceTemp, (value) => {
@@ -55,7 +60,7 @@ const form = reactive<RecipeForm>({
 })
 
 const curvePoints = computed(() => {
-  const recipe = filteredRecipes.value[0]
+  const recipe = visibleRecipes.value[0]
   if (!recipe) return []
   return Array.from({ length: 13 }, (_, index) => {
     const temp = Math.round((recipe.tempC - 3 + index * 0.5) * 10) / 10
@@ -232,7 +237,7 @@ onMounted(async () => {
           <span>胶片</span>
           <select v-model="filmId">
             <option value="all">全部胶片</option>
-            <option v-for="film in filmStore.films" :key="film.id" :value="film.id">{{ film.model }} · {{ film.emulsionNo }}</option>
+            <option v-for="film in inStockFilms" :key="film.id" :value="film.id">{{ film.model }} · {{ film.emulsionNo }}</option>
           </select>
         </label>
         <label>
@@ -266,7 +271,7 @@ onMounted(async () => {
         <div class="panel__head">
           <div>
             <h2>配方清单</h2>
-            <p>当前筛选显示 {{ filteredRecipes.length }} 条，共 {{ recipeStore.recipes.length }} 条。</p>
+            <p>当前筛选显示 {{ visibleRecipes.length }} 条，共 {{ recipeStore.recipes.length }} 条。</p>
           </div>
           <span class="count-pill">配方数 <strong data-testid="count-recipe">{{ recipeStore.recipes.length }}</strong></span>
         </div>
@@ -282,7 +287,7 @@ onMounted(async () => {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="recipe in filteredRecipes" :key="recipe.id" data-testid="row-recipe">
+              <tr v-for="recipe in visibleRecipes" :key="recipe.id" data-testid="row-recipe">
                 <td>
                   <strong>{{ filmLabel(recipe.filmId) }}</strong>
                   <small>{{ developerLabel(recipe.developerId) }} · {{ recipe.dilution }}</small>
@@ -302,7 +307,7 @@ onMounted(async () => {
               </tr>
             </tbody>
           </table>
-          <div v-if="filteredRecipes.length === 0" class="inline-empty">没有匹配配方，重置筛选或新建一条。</div>
+          <div v-if="visibleRecipes.length === 0" class="inline-empty">没有匹配配方，重置筛选或新建一条。</div>
         </div>
       </div>
 
@@ -316,7 +321,7 @@ onMounted(async () => {
         <div class="panel formula-note">
           <h2>补偿模型</h2>
           <p>以配方自身温度为基准，每升高 1°C 将显影时间乘 0.9；每降低 1°C 则乘 1.1。</p>
-          <strong>{{ actualTempC }}°C · 建议 {{ suggest(filteredRecipes[0]?.devMinutes ?? 0, actualTempC).minutes.toFixed(2) }} 分钟</strong>
+          <strong>{{ actualTempC }}°C · 建议 {{ suggest(visibleRecipes[0]?.devMinutes ?? 0, actualTempC).minutes.toFixed(2) }} 分钟</strong>
         </div>
       </aside>
     </div>
